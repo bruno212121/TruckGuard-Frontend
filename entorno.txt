@@ -1,0 +1,16 @@
+rear un Entorno Virtual
+Paso a Paso
+Crear el Entorno Virtual
+Navega a la carpeta raíz de tu proyecto TruckGuard-Frontend y crea un entorno virtual usando venv.
+
+sh
+Copiar código
+python3 -m venv venv
+Para sistemas Windows, el comando es el mismo.
+
+Activar el Entorno Virtual
+En macOS/Linux:
+
+sh
+Copiar código
+source venv/bin/activate
