@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import os
 import plotly.express as px
 
+
 # Cargar las variables de entorno desde el archivo .env
 load_dotenv()
 
@@ -74,13 +75,13 @@ def fetch_components_data(truck_id):
     response = requests.get(f'{api_url}/maintenance/{truck_id}/components', headers=headers)
 
     if response.status_code == 200:
-        components = response.json().get('components', [])
-        st.write("Components Data:", components)  # Depuración: Mostrar datos de componentes
+        components = response.json().get('components', []) # Depuración: Mostrar datos de componentes
         return components
     else:
         st.error('Error fetching components data: {}'.format(response.text))
         return []
-    
+
+
 # Función para obtener estadísticas de los componentes
 def get_component_statistics(components_data):
     health_status_values = {
@@ -96,37 +97,73 @@ def get_component_statistics(components_data):
     if 'status' in df_components.columns:
         # Calcular los promedios de los estados de salud
         df_components['health_value'] = df_components['status'].map(health_status_values)
-        st.write("Health Values:", df_components['health_value'])  # Depuración: Mostrar valores de salud
         component_stats = df_components.groupby('component')['health_value'].mean().reset_index()
         component_stats.columns = ['theta', 'metrics']
-        st.write("Component Stats:", component_stats)  # Depuración: Mostrar estadísticas de componentes
         return component_stats
     else:
         st.error("'status' field is missing in the components data")
         return pd.DataFrame(columns=['theta', 'metrics'])  # Devolver DataFrame vacío en caso de error
 
-# Función para mostrar el gráfico radar de los componentes
-def show_component_radar_chart(truck_id):
-    st.title('TruckGuard - Component Radar Chart')
-
-    components_data = fetch_components_data(truck_id)
+# Función para obtener detalles de un camión específico
+def fetch_truck_details(truck_id):
+    headers = {'Authorization': f'Bearer {st.session_state["auth_token"]}'}
+    response = requests.get(f'{api_url}/trucks/{truck_id}', headers=headers)
     
-    if components_data:
-        df_components = get_component_statistics(components_data)
-        
-        radar_fig = px.line_polar(df_components, r='metrics', theta='theta', line_close=True)
-        radar_fig.update_layout(
-            polar=dict(
-                radialaxis=dict(
-                    visible=True,
-                    range=[0, 100]
-                )),
-            showlegend=False
-        )
-        st.plotly_chart(radar_fig)
-        st.dataframe(df_components)
+    if response.status_code == 200:
+        return response.json()
     else:
-        st.error('No components data found')
+        st.error('Error fetching truck details: {}'.format(response.text))
+        return None
+
+# Función modificada para mostrar el gráfico radar de los componentes con información adicional del camión
+def show_component_radar_chart(truck_id):
+    truck_details = fetch_truck_details(truck_id)
+    title = "Analisis de camion"
+    st.title(title)
+
+    if truck_details:
+        truck = truck_details.get('truck', {})
+        truck_brand = truck.get('brand', 'Unknown')
+        truck_milage = truck.get('mileage', 'Unknown')
+        
+        if truck['driver']:
+            truck_driver = truck['driver']['name']
+
+        st.write("Truck Details:")
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric('Brand', truck_brand)
+        col2.metric('Driver', truck_driver)
+        col3.metric('Mileage', truck_milage)
+
+
+        components_data = fetch_components_data(truck_id)
+        
+        if components_data:
+            df_components = get_component_statistics(components_data)
+            
+            radar_fig = px.line_polar(df_components, r='metrics', theta='theta', line_close=True)
+            radar_fig.update_layout(
+                polar=dict(
+                    radialaxis=dict(
+                        visible=True,
+                        range=[0, 100]
+                    )),
+                showlegend=False
+            )
+            st.plotly_chart(radar_fig)
+            bar_fig = px.bar(df_components, x='theta', y='metrics', color='metrics', 
+                             labels={'theta': 'Component', 'metrics': 'Health Metric'},
+                             title='Component Health Metrics')
+            st.plotly_chart(bar_fig)
+            st.write('Component Health Metrics:')
+            st.dataframe(df_components)
+        else:
+            st.error('No components data found')
+    else:
+        st.error('No truck details found')
+
+
 
 # Función para mostrar el formulario de creación de camión
 def show_create_truck():
@@ -215,15 +252,14 @@ def show_create_trip():
     # Form inputs
     origin = st.text_input('Origin')
     destination = st.text_input('Destination')
-    status = st.text_input('Status')
-    truck_id = st.number_input('Truck ID', min_value=0)
-    driver_id = st.number_input('Driver ID', min_value=0)
+    truck_id = st.number_input('Truck ID', min_value=1)
+    driver_id = st.number_input('Driver ID', min_value=1)
 
     if st.button('Create Trip'):
         trip_data = {
             'origin': origin,
             'destination': destination,
-            'status': status,
+            'status': 'pending',
             'truck_id': truck_id,
             'driver_id': driver_id
         }
@@ -233,33 +269,67 @@ def show_create_trip():
         
         if response.status_code == 201:
             st.success('Trip created successfully!')
+            trip_details = response.json().get('trip', {})
+            st.write('Trip Details:')
+            st.write(f"Origin: {trip_details['origin']}")
+            st.write(f"Destination: {trip_details['destination']}")
+            st.write(f"Status: {trip_details['status']}")
+            st.write(f"distance: {trip_details['distance']}")
+            st.write(f"duration: {trip_details['duration']}")
+            st.write(f"Driver: {trip_details['driver']['name']} (ID: {trip_details['driver']['id']})")
+            st.write(f"Truck: {trip_details['truck']['brand']} {trip_details['truck']['model']} ({trip_details['truck']['plate']})")
+            
         else:
             try:
                 st.error(f'Error creating trip: {response.json().get("message", "Unknown error")}')
             except requests.exceptions.JSONDecodeError:
                 st.error('Error creating trip: Invalid response from server')
 
-# Función para listar viajes
 def show_list_trips():
     st.title('TruckGuard - List of Trips')
 
-    headers = {'Authorization': f'Bearer {st.session_state["auth_token"]}'}
-    response = requests.get(f'{api_url}/trips/all', headers=headers)
+    
+    page = st.number_input('Page number', min_value=1, value=1) 
+    per_page = st.number_input('Trips per page', min_value=1, value=10)
 
-    if response.status_code == 200:
-        trips = response.json().get('trips', [])
-        for trip in trips:
-            st.write(trip)
+    if st.button('Fetch Trips'):
+        
+        headers = {
+            'Authorization': f'Bearer {st.session_state["auth_token"]}',
+            'Content-Type': 'application/json'
+        }
+
+        params = {
+            'page': page,
+            'per_page': per_page
+        }
+        response = requests.get(f'{api_url}/trips/all', headers=headers, params=params)
+
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                trips = data.get('trips', [])
+                
+                # Mostrar información sobre la paginación
+                st.write(f"Total trips: {data.get('total')}")
+                # Mostrar los viajes en una tabla
+                if trips:
+                    for trip in trips:
+                        st.write(f"Trip ID: {trip['id']}, Origin: {trip['origin']}, Destination: {trip['destination']}, Status: {trip['status']}")
+                else:
+                    st.write("No trips found on this page.")
+            except ValueError:
+                st.error("Received non-JSON response from the server.")
+                st.text(response.text)
+        else:
+            st.error(f'Error fetching trips: {response.status_code}')
     else:
-        try:
-            st.error(f'Error fetching trips: {response.json().get("message", "Unknown error")}')
-        except requests.exceptions.JSONDecodeError:
-            st.error('Error fetching trips: Invalid response from server')
+        st.info("Use the controls above to fetch trips.")
 
-# Función para obtener un viaje específico
+
+
 def show_get_trip():
     st.title('TruckGuard - Get Trip Details')
-
     trip_id = st.number_input('Trip ID', min_value=1)
 
     if st.button('Get Trip'):
@@ -267,26 +337,108 @@ def show_get_trip():
         response = requests.get(f'{api_url}/trips/{trip_id}', headers=headers)
 
         if response.status_code == 200:
-            trip = response.json()
+            trip = response.json().get('trip', {})
             st.write("Trip Data:")
+            st.write(f"ID: {trip.get('id')}")
+            st.write(f"Origin: {trip.get('origin')}")
+            st.write(f"Destination: {trip.get('destination')}")
+            st.write(f"Status: {trip.get('status')}")
+            st.write(f"Updated At: {trip.get('updated_at')}")
+            st.write("Driver Data:")
+            st.write(f"Name: {trip.get('driver')}")
+            st.write("Truck Data:")
+            st.write(f"{trip.get('truck_details')}")
+
+        else:
+            st.error(f'Error fetching trip: {response.status_code}')
+            st.text(response.text)
+
+
+def change_trip_status_to_in_course_or_complete(trip_id):
+    headers = {'Authorization': f'Bearer {st.session_state["auth_token"]}'}
+
+    # Obtener detalles del viaje actual
+    response = requests.get(f'{api_url}/trips/{trip_id}', headers=headers)
+    if response.status_code == 200:
+        trip = response.json().get('trip', {})
+        current_status = trip.get('status')
+        
+        if current_status == 'In Course':
+            # Cambiar el estado a 'Completed'
             try:
-                st.write(f"ID: {trip['id']}")
-                st.write(f"Origin: {trip['origin']}")
-                st.write(f"Destination: {trip['destination']}")
-                st.write(f"Status: {trip['status']}")
-                st.write(f"Distance: {trip['distance']}")
-                st.write(f"Duration: {trip['duration']}")
-                st.write(f"Driver ID: {trip['driver_id']}")
-                st.write(f"Truck ID: {trip['truck_id']}")
-                st.write(f"Created at: {trip['created_at']}")
-            except KeyError as e:
-                st.error(f"Missing expected field in response: {e}")
+                update_response = requests.patch(
+                    f'{api_url}/trips/{trip_id}/complete',
+                    headers=headers
+                )
+                if update_response.status_code == 200:
+                    st.success('Trip status updated to Completed')
+                else:
+                    st.error(f'Failed to update trip status: {update_response.text}')
+            except requests.exceptions.RequestException as e:
+                st.error(f'Request failed: {e}')
+        elif current_status == 'Completed':
+            st.warning('The trip is already completed.')
+        else:
+            # Cambiar el estado a 'In Course'
+            try:
+                update_response = requests.patch(
+                    f'{api_url}/trips/{trip_id}/update',
+                    headers=headers,
+                    json={"status": "In Course"}
+                )
+                if update_response.status_code == 200:
+                    st.success('Trip status updated to In Course')
+                else:
+                    st.error(f'Failed to update trip status: {update_response.text}')
+            except requests.exceptions.RequestException as e:
+                st.error(f'Request failed: {e}')
+    else:
+        st.error(f'Error fetching trip: {response.status_code}')
+        st.text(response.text)
+            
+
+def complete_trip_directly(trip_id):
+    headers = {'Authorization': f'Bearer {st.session_state["auth_token"]}'}
+
+    # Obtener detalles del viaje actual
+    response = requests.get(f'{api_url}/trips/{trip_id}', headers=headers)
+    if response.status_code == 200:
+        trip = response.json().get('trip', {})
+        current_status = trip.get('status')
+        
+        if current_status == 'Completed':
+            st.warning('The trip is already completed.')
+        elif current_status == 'Pending':
+            st.warning('The trip is still pending. Please change the status to "In Course" first.')
         else:
             try:
-                st.error(f'Error fetching trip: {response.json().get("message", "Unknown error")}')
-            except requests.exceptions.JSONDecodeError:
-                st.error('Error fetching trip: Invalid response from server')
+                # Realizar la solicitud PATCH para actualizar el estado del viaje
+                update_response = requests.patch(
+                    f'{api_url}/trips/{trip_id}/complete',
+                    headers=headers
+                )
+                if update_response.status_code == 200:
+                    st.success('Trip status updated to Completed')
+                    st.write('Trip completed successfully!')
+                    completed_trip = update_response.json()
+                    st.write(f"Origin: {completed_trip['origin']}")
+                    st.write(f"Destination: {completed_trip['destination']}")
+                    st.write(f"distance: {completed_trip['distance']}")
+                    st.write(f"duration: {completed_trip['duration']}")
+                    #informacion del camion
+                    st.write('Truck Details:')
+                    st.write(f"Plate: {completed_trip['brand']}")
+                    st.write(f"Model: {completed_trip['plate']}")
+                else:
+                    st.error(f'Failed to update trip status: {update_response.text}')
+            except requests.exceptions.RequestException as e:
+                st.error(f'Request failed: {e}')
+    else:
+        st.error(f'Error fetching trip: {response.status_code}')
+        st.text(response.text)
 
+
+  
 # Función para actualizar un viaje
 def show_update_trip():
     st.title('TruckGuard - Update Trip')
@@ -330,6 +482,47 @@ def show_delete_trip():
         else:
             st.error(f'Error deleting trip: {response.json().get("message", "Unknown error")}')
 
+
+def show_add_component_to_truck():
+    st.title('Add New Component to Truck')
+
+    # Form inputs
+    truck_id = st.number_input('Truck ID', min_value=1)
+    component = st.text_input('Component')
+    description = st.text_input('Description')
+    cost = st.number_input('Cost', min_value=0.0)
+    driver_id = st.number_input('Driver ID', min_value=1)  # Si el camión siempre tiene un conductor asignado, puedes hacer esto opcional
+    mileage_interval = st.number_input('Mileage Interval', min_value=0, value=10000)
+    next_maintenance_mileage = st.number_input('Next Maintenance Mileage', min_value=0, value=10000)
+    maintenance_interval = st.number_input('Maintenance Interval', min_value=0, value=10000)
+
+    if st.button('Add Component'):
+        component_data = {
+            'truck_id': truck_id,
+            'component': component,
+            'description': description,
+            'cost': cost,
+            'driver_id': driver_id,
+            'mileage_interval': mileage_interval,
+            'next_maintenance_mileage': next_maintenance_mileage,
+            'maintenance_interval': maintenance_interval
+        }
+
+        headers = {'Authorization': f'Bearer {st.session_state["auth_token"]}'}
+        response = requests.post(f'{api_url}/maintenance/new', json=component_data, headers=headers)
+        
+        if response.status_code == 201:
+            st.success('Component added successfully!')
+        else:
+            try:
+                error_message = response.json().get("message", "Unknown error")
+                st.error(f'Error adding component: {error_message}')
+                st.text(response.json().get("error", ""))
+            except requests.exceptions.JSONDecodeError:
+                st.error('Error adding component: Invalid response from server')
+
+
+
 def main():
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
@@ -342,16 +535,28 @@ def main():
         else:
             show_welcome()
     else:
-        st.sidebar.title("Navigation")
+        
+        st.sidebar.title('TruckGuard')
         trip_options = st.sidebar.multiselect(
             "Trip Operations",
             ["Create Trip", "List Trips", "Get Trip", "Update Trip", "Delete Trip"]
         )
 
+        driver_options = st.sidebar.multiselect(
+            "Driver Operations",
+            ["Change Trip Status to In Course or Complete", "Complete Trip Directly", "Add Component to Truck"]
+        )
+
         truck_options = st.sidebar.multiselect(
             "Truck Operations",
-            ["Create Truck", "List Trucks", "Component Radar Chart"]
+            ["Create Truck", "assign truck to driver"]
         )
+
+        analytics_options = st.sidebar.multiselect(
+            "Analytics Operations",
+            ["Component Radar Chart","List Trucks fleet"]
+        )
+
 
         if "Create Trip" in trip_options:
             show_create_trip()
@@ -364,11 +569,27 @@ def main():
         if "Delete Trip" in trip_options:
             show_delete_trip()
 
+        if "Change Trip Status to In Course or Complete" in driver_options:
+            trip_id = st.sidebar.number_input('Trip ID to change status', min_value=1)
+            if st.sidebar.button('Change Status to In Course or Complete'):
+                change_trip_status_to_in_course_or_complete(trip_id)
+        if "Complete Trip Directly" in driver_options:
+            trip_id = st.sidebar.number_input('Trip ID to complete directly', min_value=1)
+            if st.sidebar.button('Complete Trip Directly'):
+                complete_trip_directly(trip_id)
+        if "Add Component to Truck" in driver_options:
+            show_add_component_to_truck()
+
+
+
+
         if "Create Truck" in truck_options:
             show_create_truck()
-        if "List Trucks" in truck_options:
+
+
+        if "List Trucks fleet" in analytics_options:
             show_list_trucks()
-        if "Component Radar Chart" in truck_options:
+        if "Component Radar Chart" in analytics_options:
             truck_id = st.sidebar.number_input('Truck ID', min_value=1, value=1)
             show_component_radar_chart(truck_id)
 
